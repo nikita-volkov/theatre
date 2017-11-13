@@ -3,7 +3,7 @@ name:
 version:
   1
 category:
-  Concurrency
+  Concurrency, Actors
 synopsis:
   Minimalistic actor library
 homepage:
