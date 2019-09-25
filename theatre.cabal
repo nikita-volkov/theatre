@@ -50,5 +50,4 @@ library
     contravariant >= 1.3 && < 2,
     semigroups >= 0.18 && < 0.20,
     -- general:
-    base-prelude >= 0.1.19 && < 2,
-    base >= 4.8 && < 5
+    base >= 4.9 && < 5
