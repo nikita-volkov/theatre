@@ -16,6 +16,7 @@ module Theatre
   -- * Actor definition
   Actor,
   stateful,
+  machine,
 )
 where
 
@@ -75,13 +76,48 @@ newtype Actor msg =
   Actor (TBatchQueue.TBatchQueue msg -> IO ())
 
 {-|
+Define from fold-like actions over internal state.
+
+Accepts:
+- IO-action creating an initial state or nothing,
+  if the actor must be immediately terminated.
+- Transition function from message and state
+  to an IO-action, which produces the new state or
+  nothing if the actor must be stopped.
+-}
+stateful :: IO (Maybe state) -> (message -> state -> IO (Maybe state)) -> Actor message
+stateful initialize transition =
+  Actor $ \ queue ->
+    let
+      receiveBatch state =
+        atomically (TBatchQueue.readBatch queue) >>= eliminateBatch state
+      eliminateBatch !state =
+        \ case
+          Cons msg batchTail ->
+            transition msg state >>= \ case
+              Just newState ->
+                eliminateBatch newState batchTail
+              Nothing ->
+                atomically $ TBatchQueue.writeBatch queue batchTail
+          Nil ->
+            receiveBatch state
+      in
+        initialize >>= \ case
+          Just state ->
+            receiveBatch state
+          Nothing ->
+            return ()
+
+{-|
+Like 'stateful', but isolates the pure state.
+
 - Initial state
 - State transition function
 - State interpretation as effect
 - Checking whether to receive another message
 -}
-stateful :: state -> (message -> state -> state) -> (state -> IO ()) -> (state -> Bool) -> Actor message
-stateful initialState transition act checkReceive =
+machine :: state -> (message -> state -> state) -> (state -> IO ()) -> (state -> Bool) -> Actor message
+machine initialState transition act checkReceive =
   Actor $ \ queue ->
     let
       receiveBatch state =
