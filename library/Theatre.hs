@@ -8,6 +8,8 @@ module Theatre
   graceful,
   disgraceful,
   suicidal,
+  steppingEffectfully,
+  steppingPurely,
   -- * Usage
   tell,
   kill,
@@ -123,3 +125,45 @@ suicidal receiver =
     (inChan, outChan) <- E.newChan
     threadId <- F.fork (receiver (E.readChan outChan))
     return (Actor (E.writeChan inChan) (killThread threadId))
+
+{-|
+An actor which threads a persistent state thru its iterations.
+It cannot die by itself unless explicitly killed.
+
+Given an interpreter of messages and initial state generator,
+forks a thread to run the computation on and 
+produces a handle to address that actor.
+
+Killing that actor will make it process all the messages in the queue first.
+All the messages sent to it after killing won't be processed.
+-}
+steppingEffectfully :: (message -> state -> IO state) -> IO state -> IO (Actor message)
+steppingEffectfully transition initalize =
+  do
+    (inChan, outChan) <- E.newChan
+    let
+      loop !state =
+        {-# SCC "steppingEffectfully/loop" #-}
+        do
+          message <- E.readChan outChan
+          case message of
+            Just payload ->
+              do
+                newState <- transition payload state
+                loop newState
+            Nothing ->
+              return ()
+    F.fork (initalize >>= loop)
+    return (Actor (E.writeChan inChan . Just) (E.writeChan inChan Nothing))
+
+{-|
+Same as 'steppingEffectfully',
+but isolates pure state management from its effectful interpretation,
+letting you define the logic in isolation.
+-}
+steppingPurely :: (message -> state -> state) -> state -> (state -> IO ()) -> IO (Actor message)
+steppingPurely transition initialState act =
+  steppingEffectfully (\m s -> actReturning (transition m s)) (actReturning initialState)
+  where
+    actReturning s =
+      act s $> s
