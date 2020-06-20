@@ -1,169 +1,106 @@
 {-|
 Minimalistic actor library.
+
+First you declare channels,
+then you spawn actors.
+This isolates the definition of actors from their connection,
+allowing to define recursive networks.
+I.e., when two actors send messages to each other.
 -}
 module Theatre
 (
-  Actor,
-  -- * Construction
-  graceful,
-  disgraceful,
-  suicidal,
-  steppingEffectfully,
-  steppingPurely,
-  -- * Usage
+  -- * Channel
+  allocateChannel,
   tell,
-  kill,
+  spawn,
+  -- * Actor definition
+  Actor,
+  stateful,
 )
 where
 
 import Theatre.Prelude
-import qualified Control.Concurrent.Chan.Unagi as E
-import qualified SlaveThread as F
+import qualified Theatre.Util.TBatchQueue as TBatchQueue
 
 
-{-|
-Actor, which processes the messages of type @message@.
-
-An abstraction over the message channel, thread-forking and killing.
--}
-data Actor message =
-  Actor {
-    {-| Send a message to the actor -}
-    tell :: message -> IO (),
-    {-| Kill the actor -}
-    kill :: IO ()
-  }
-
-instance Semigroup (Actor message) where
-  (<>) (Actor leftTell leftKill) (Actor rightTell rightKill) =
-    Actor tell kill
-    where
-      tell message =
-        leftTell message >> rightTell message
-      kill =
-        leftKill >> rightKill
-
-instance Monoid (Actor message) where
-  mempty =
-    Actor (const (return ())) (return ())
-  mappend =
-    (<>)
-
-instance Contravariant Actor where
-  contramap fn (Actor tell kill) =
-    Actor (tell . fn) kill
-
-instance Divisible Actor where
-  conquer =
-    mempty
-  divide divisor (Actor leftTell leftKill) (Actor rightTell rightKill) =
-    Actor tell kill
-    where
-      tell message =
-        case divisor message of
-          (leftMessage, rightMessage) -> leftTell leftMessage >> rightTell rightMessage
-      kill =
-        leftKill >> rightKill
-
-instance Decidable Actor where
-  lose fn =
-    Actor (const (return ()) . absurd . fn) (return ())
-  choose choice (Actor leftTell leftKill) (Actor rightTell rightKill) =
-    Actor tell kill
-    where
-      tell =
-        either leftTell rightTell . choice
-      kill =
-        leftKill >> rightKill
+-- * Channel
+-------------------------
 
 {-|
-An actor which cannot die by itself unless explicitly killed.
-
-Given an interpreter of messages,
-forks a thread to run the computation on and 
-produces a handle to address that actor.
-
-Killing that actor will make it process all the messages in the queue first.
-All the messages sent to it after killing won't be processed.
+An address to which the messages get sent,
+and which the actor listens to.
 -}
-graceful :: (message -> IO ()) {-^ Interpreter of a message -} -> IO (Actor message)
-graceful interpretMessage =
-  do
-    (inChan, outChan) <- E.newChan
-    F.fork $ fix $ \loop -> {-# SCC "graceful/loop" #-} do
-      message <- E.readChan outChan
-      case message of
-        Just payload ->
-          do
-            interpretMessage payload
-            loop
-        Nothing ->
-          return ()
-    return (Actor (E.writeChan inChan . Just) (E.writeChan inChan Nothing))
+newtype Channel msg =
+  Channel (TBatchQueue.TBatchQueue msg)
 
 {-|
-An actor which cannot die by itself unless explicitly killed.
-
-Given an interpreter of messages,
-forks a thread to run the computation on and 
-produces a handle to address that actor.
+Allocate a channel.
 -}
-disgraceful :: (message -> IO ()) {-^ Interpreter of a message -} -> IO (Actor message)
-disgraceful receiver =
-  suicidal (\producer -> forever (producer >>= receiver))
+allocateChannel :: IO (Channel msg)
+allocateChannel =
+  Channel <$> atomically TBatchQueue.new
 
 {-|
-An actor, whose interpreter can decide that the actor should die.
-
-Given an implementation of a receiver loop of messages,
-forks a thread to run that receiver on and
-produces a handle to address that actor.
+Send a message to a channel.
 -}
-suicidal :: (IO message -> IO ()) {-^ A message receiver loop. When the loop exits, the actor dies -} -> IO (Actor message)
-suicidal receiver =
-  do
-    (inChan, outChan) <- E.newChan
-    threadId <- F.fork (receiver (E.readChan outChan))
-    return (Actor (E.writeChan inChan) (killThread threadId))
+tell :: Channel msg -> msg -> IO ()
+tell (Channel queue) msg =
+  atomically (TBatchQueue.write queue msg)
 
 {-|
-An actor which threads a persistent state thru its iterations.
-It cannot die by itself unless explicitly killed.
+Spawn an actor listening for messages on that channel.
 
-Given an interpreter of messages and initial state generator,
-forks a thread to run the computation on and 
-produces a handle to address that actor.
+When multiple actors are spawned on the same channel,
+they will compete for the incoming messages.
 
-Killing that actor will make it process all the messages in the queue first.
-All the messages sent to it after killing won't be processed.
+It is advised to spawn a single actor per channel.
+Otherwise you may end up with a tangled architecture.
 -}
-steppingEffectfully :: (message -> state -> IO state) -> IO state -> IO (Actor message)
-steppingEffectfully transition initalize =
-  do
-    (inChan, outChan) <- E.newChan
+spawn :: Channel msg -> Actor msg -> IO ()
+spawn (Channel queue) (Actor runLoop) =
+  void $ forkIO $ runLoop queue
+
+
+-- * Actor definition
+-------------------------
+
+{-|
+Actor definition.
+
+Specifies how to process the messages.
+
+Use 'spawn' to launch actors.
+-}
+newtype Actor msg =
+  Actor (TBatchQueue.TBatchQueue msg -> IO ())
+
+{-|
+- Initial state
+- State transition function
+- State interpretation as effect
+- Checking whether to receive another message
+-}
+stateful :: state -> (message -> state -> state) -> (state -> IO ()) -> (state -> Bool) -> Actor message
+stateful initialState transition act checkReceive =
+  Actor $ \ queue ->
     let
-      loop !state =
-        {-# SCC "steppingEffectfully/loop" #-}
+      receiveBatch state =
+        atomically (TBatchQueue.readBatch queue) >>= eliminateBatch state
+      eliminateBatch !state =
+        \ case
+          Cons msg batchTail ->
+            let
+              newState = transition msg state
+              in
+                do
+                  act newState
+                  if checkReceive newState
+                    then eliminateBatch newState batchTail
+                    else atomically $ TBatchQueue.writeBatch queue batchTail
+          Nil -> receiveBatch state
+      in
         do
-          message <- E.readChan outChan
-          case message of
-            Just payload ->
-              do
-                newState <- transition payload state
-                loop newState
-            Nothing ->
-              return ()
-    F.fork (initalize >>= loop)
-    return (Actor (E.writeChan inChan . Just) (E.writeChan inChan Nothing))
-
-{-|
-Same as 'steppingEffectfully',
-but isolates pure state management from its effectful interpretation,
-letting you define the logic in isolation.
--}
-steppingPurely :: (message -> state -> state) -> state -> (state -> IO ()) -> IO (Actor message)
-steppingPurely transition initialState act =
-  steppingEffectfully (\m s -> actReturning (transition m s)) (actReturning initialState)
-  where
-    actReturning s =
-      act s $> s
+          act initialState
+          if checkReceive initialState
+            then receiveBatch initialState
+            else return ()

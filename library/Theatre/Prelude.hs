@@ -76,3 +76,7 @@ import Unsafe.Coerce as Exports
 -- contravariant
 -------------------------
 import Data.Functor.Contravariant.Divisible as Exports
+
+-- strict-list
+-------------------------
+import StrictList as Exports (List(..))

@@ -24,9 +24,9 @@ library
     Theatre
   other-modules:
     Theatre.Prelude
+    Theatre.Util.TBatchQueue
   build-depends:
     base >=4.9 && <5,
     contravariant >=1.3 && <2,
     semigroups >=0.18 && <0.20,
-    slave-thread ==1.*,
-    unagi-chan ==0.4.*
+    strict-list >=0.1.5 && <0.2
