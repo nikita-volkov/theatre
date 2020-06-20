@@ -59,7 +59,7 @@ Otherwise you may end up with a tangled architecture.
 -}
 spawn :: Channel msg -> Actor msg -> IO ()
 spawn (Channel queue) (Actor runLoop) =
-  void $ forkIO $ runLoop queue
+  void $ forkIO $ runLoop $ atomically $ TBatchQueue.readBatch queue
 
 
 -- * Actor definition
@@ -73,7 +73,10 @@ Specifies how to process the messages.
 Use 'spawn' to launch actors.
 -}
 newtype Actor msg =
-  Actor (TBatchQueue.TBatchQueue msg -> IO ())
+  Actor (IO (List msg) -> IO ())
+
+instance Contravariant Actor where
+  contramap fn (Actor def) = Actor (\ recv -> def (fmap (fmap fn) recv))
 
 {-|
 Define from fold-like actions over internal state.
@@ -87,10 +90,10 @@ Accepts:
 -}
 stateful :: IO (Maybe state) -> (message -> state -> IO (Maybe state)) -> Actor message
 stateful initialize transition =
-  Actor $ \ queue ->
+  Actor $ \ receiveBatch ->
     let
-      receiveBatch state =
-        atomically (TBatchQueue.readBatch queue) >>= eliminateBatch state
+      receiveBatchAndEliminate state =
+        receiveBatch >>= eliminateBatch state
       eliminateBatch !state =
         \ case
           Cons msg batchTail ->
@@ -98,13 +101,13 @@ stateful initialize transition =
               Just newState ->
                 eliminateBatch newState batchTail
               Nothing ->
-                atomically $ TBatchQueue.writeBatch queue batchTail
+                return ()
           Nil ->
-            receiveBatch state
+            receiveBatchAndEliminate state
       in
         initialize >>= \ case
           Just state ->
-            receiveBatch state
+            receiveBatchAndEliminate state
           Nothing ->
             return ()
 
@@ -118,10 +121,10 @@ Like 'stateful', but isolates the pure state.
 -}
 machine :: state -> (message -> state -> state) -> (state -> IO ()) -> (state -> Bool) -> Actor message
 machine initialState transition act checkReceive =
-  Actor $ \ queue ->
+  Actor $ \ receiveBatch ->
     let
-      receiveBatch state =
-        atomically (TBatchQueue.readBatch queue) >>= eliminateBatch state
+      receiveBatchAndEliminate state =
+        receiveBatch >>= eliminateBatch state
       eliminateBatch !state =
         \ case
           Cons msg batchTail ->
@@ -132,11 +135,11 @@ machine initialState transition act checkReceive =
                   act newState
                   if checkReceive newState
                     then eliminateBatch newState batchTail
-                    else atomically $ TBatchQueue.writeBatch queue batchTail
-          Nil -> receiveBatch state
+                    else return ()
+          Nil -> receiveBatchAndEliminate state
       in
         do
           act initialState
           if checkReceive initialState
-            then receiveBatch initialState
+            then receiveBatchAndEliminate initialState
             else return ()
