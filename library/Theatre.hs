@@ -4,12 +4,8 @@ module Theatre
   ( Actor,
 
     -- * Construction
-    graceful,
-    disgraceful,
-    suicidal,
-
-    -- ** Stepping
-    steppingGraceful,
+    stateless,
+    stateful,
 
     -- * Usage
     tell,
@@ -83,16 +79,16 @@ instance Decidable Actor where
 --
 -- Killing that actor will make it process all the messages in the queue first.
 -- All the messages sent to it after killing won't be processed.
-graceful ::
+stateless ::
   -- | Interpreter of a message
   (message -> IO ()) ->
   IO (Actor message)
-graceful interpretMessage =
+stateless interpretMessage =
   do
     (inChan, outChan) <- E.newChan
     F.fork $
       fix $ \loop ->
-        {-# SCC "graceful/loop" #-}
+        {-# SCC "stateless/loop" #-}
         do
           message <- E.readChan outChan
           case message of
@@ -105,37 +101,9 @@ graceful interpretMessage =
     return (Actor (E.writeChan inChan . Just) (E.writeChan inChan Nothing))
 
 -- |
--- An actor which cannot die by itself unless explicitly killed.
+-- Actor with memory.
 --
--- Given an interpreter of messages,
--- forks a thread to run the computation on and
--- produces a handle to address that actor.
-disgraceful ::
-  -- | Interpreter of a message
-  (message -> IO ()) ->
-  IO (Actor message)
-disgraceful receiver =
-  suicidal (\producer -> forever (producer >>= receiver))
-
--- |
--- An actor, whose interpreter can decide that the actor should die.
---
--- Given an implementation of a receiver loop of messages,
--- forks a thread to run that receiver on and
--- produces a handle to address that actor.
-suicidal ::
-  -- | A message receiver loop. When the loop exits, the actor dies
-  (IO message -> IO ()) ->
-  IO (Actor message)
-suicidal receiver =
-  do
-    (inChan, outChan) <- E.newChan
-    threadId <- F.fork (receiver (E.readChan outChan))
-    return (Actor (E.writeChan inChan) (killThread threadId))
-
--- |
--- An actor which threads a persistent state thru its iterations.
--- It cannot die by itself unless explicitly killed.
+-- Threads a persistent state thru its iterations.
 --
 -- Given an interpreter of messages and initial state generator,
 -- forks a thread to run the computation on and
@@ -143,12 +111,12 @@ suicidal receiver =
 --
 -- Killing that actor will make it process all the messages in the queue first.
 -- All the messages sent to it after killing won't be processed.
-steppingGraceful :: state -> (state -> message -> IO state) -> IO (Actor message)
-steppingGraceful state step =
+stateful :: state -> (state -> message -> IO state) -> IO (Actor message)
+stateful state step =
   do
     (inChan, outChan) <- E.newChan
     let loop !state =
-          {-# SCC "steppingGraceful/loop" #-}
+          {-# SCC "stateful/loop" #-}
           do
             message <- E.readChan outChan
             case message of
