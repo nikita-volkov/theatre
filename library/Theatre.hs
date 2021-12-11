@@ -22,53 +22,49 @@ import Theatre.Prelude
 --
 -- An abstraction over the message channel, thread-forking and killing.
 data Actor message = Actor
-  { -- | Send a message to the actor
+  { -- | Send a message to the actor.
     tell :: message -> IO (),
-    -- | Kill the actor
-    kill :: IO ()
+    -- | Kill the actor.
+    kill :: IO (),
+    -- | Wait for the actor to die due to error or being killed.
+    wait :: IO ()
   }
 
 instance Semigroup (Actor message) where
-  (<>) (Actor leftTell leftKill) (Actor rightTell rightKill) =
-    Actor tell kill
+  (<>) (Actor lTell lKill lWait) (Actor rTell rKill rWait) =
+    Actor tell kill wait
     where
-      tell message =
-        leftTell message >> rightTell message
-      kill =
-        leftKill >> rightKill
+      tell msg = lTell msg >> rTell msg
+      kill = lKill >> rKill
+      wait = lWait >> rWait
 
 instance Monoid (Actor message) where
   mempty =
-    Actor (const (return ())) (return ())
-  mappend =
-    (<>)
+    Actor (const (return ())) (return ()) (return ())
 
 instance Contravariant Actor where
-  contramap fn (Actor tell kill) =
-    Actor (tell . fn) kill
+  contramap fn (Actor tell kill wait) =
+    Actor (tell . fn) kill wait
 
 instance Divisible Actor where
   conquer =
     mempty
-  divide divisor (Actor leftTell leftKill) (Actor rightTell rightKill) =
-    Actor tell kill
+  divide divisor (Actor lTell lKill lWait) (Actor rTell rKill rWait) =
+    Actor tell kill wait
     where
-      tell message =
-        case divisor message of
-          (leftMessage, rightMessage) -> leftTell leftMessage >> rightTell rightMessage
-      kill =
-        leftKill >> rightKill
+      tell msg = case divisor msg of (lMsg, rMsg) -> lTell lMsg >> rTell rMsg
+      kill = lKill >> rKill
+      wait = lWait >> rWait
 
 instance Decidable Actor where
   lose fn =
-    Actor (const (return ()) . absurd . fn) (return ())
-  choose choice (Actor leftTell leftKill) (Actor rightTell rightKill) =
-    Actor tell kill
+    Actor (const (return ()) . absurd . fn) (return ()) (return ())
+  choose choice (Actor lTell lKill lWait) (Actor rTell rKill rWait) =
+    Actor tell kill wait
     where
-      tell =
-        either leftTell rightTell . choice
-      kill =
-        leftKill >> rightKill
+      tell = either lTell rTell . choice
+      kill = lKill >> rKill
+      wait = lWait >> rWait
 
 -- |
 -- An actor which cannot die by itself unless explicitly killed.
@@ -86,6 +82,7 @@ stateless ::
 stateless interpretMessage =
   do
     (inChan, outChan) <- E.newChan
+    lock <- newEmptyMVar
     F.fork $
       fix $ \loop ->
         {-# SCC "stateless/loop" #-}
@@ -96,9 +93,13 @@ stateless interpretMessage =
               do
                 interpretMessage payload
                 loop
-            Nothing ->
-              return ()
-    return (Actor (E.writeChan inChan . Just) (E.writeChan inChan Nothing))
+            Nothing -> putMVar lock ()
+    return
+      ( Actor
+          (E.writeChan inChan . Just)
+          (E.writeChan inChan Nothing)
+          (takeMVar lock)
+      )
 
 -- |
 -- Actor with memory.
@@ -112,19 +113,23 @@ stateless interpretMessage =
 -- Killing that actor will make it process all the messages in the queue first.
 -- All the messages sent to it after killing won't be processed.
 stateful :: state -> (state -> message -> IO state) -> IO (Actor message)
-stateful state step =
+stateful state progress =
   do
     (inChan, outChan) <- E.newChan
-    let loop !state =
-          {-# SCC "stateful/loop" #-}
-          do
+    lock <- newEmptyMVar
+    F.fork $
+      let {-# SCC loop #-}
+          loop !state = do
             message <- E.readChan outChan
             case message of
-              Just payload ->
-                do
-                  newState <- step state payload
-                  loop newState
-              Nothing ->
-                return ()
-    F.fork (loop state)
-    return (Actor (E.writeChan inChan . Just) (E.writeChan inChan Nothing))
+              Just message -> do
+                state <- progress state message
+                loop state
+              Nothing -> putMVar lock ()
+       in loop state
+    return
+      ( Actor
+          (E.writeChan inChan . Just)
+          (E.writeChan inChan Nothing)
+          (takeMVar lock)
+      )
