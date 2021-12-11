@@ -113,8 +113,8 @@ stateless interpretMessage =
 --
 -- Killing that actor will make it process all the messages in the queue first.
 -- All the messages sent to it after killing won't be processed.
-stateful :: state -> (state -> message -> IO state) -> IO (Actor message)
-stateful state progress =
+stateful :: state -> (state -> message -> IO state) -> (state -> IO ()) -> IO (Actor message)
+stateful state progress finalise =
   do
     (inChan, outChan) <- E.newChan
     lock <- newEmptyMVar
@@ -126,7 +126,9 @@ stateful state progress =
               Just message -> do
                 state <- progress state message
                 loop state
-              Nothing -> putMVar lock ()
+              Nothing -> do
+                finalise state
+                putMVar lock ()
        in loop state
     return
       ( Actor
