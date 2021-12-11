@@ -4,8 +4,8 @@ module Theatre
   ( Actor,
 
     -- * Construction
-    stateless,
-    stateful,
+    spawnStateless,
+    spawnStateful,
 
     -- * Usage
     tell,
@@ -76,17 +76,17 @@ instance Decidable Actor where
 --
 -- Killing that actor will make it process all the messages in the queue first.
 -- All the messages sent to it after killing won't be processed.
-stateless ::
+spawnStateless ::
   -- | Interpreter of a message
   (message -> IO ()) ->
   IO (Actor message)
-stateless interpretMessage =
+spawnStateless interpretMessage =
   do
     (inChan, outChan) <- E.newChan
     lock <- newEmptyMVar
     F.fork $
       fix $ \loop ->
-        {-# SCC "stateless/loop" #-}
+        {-# SCC "spawnStateless/loop" #-}
         do
           message <- E.readChan outChan
           case message of
@@ -113,8 +113,8 @@ stateless interpretMessage =
 --
 -- Killing that actor will make it process all the messages in the queue first.
 -- All the messages sent to it after killing won't be processed.
-stateful :: state -> (state -> message -> IO state) -> (state -> IO ()) -> IO (Actor message)
-stateful state progress finalise =
+spawnStateful :: state -> (state -> message -> IO state) -> (state -> IO ()) -> IO (Actor message)
+spawnStateful state progress finalise =
   do
     (inChan, outChan) <- E.newChan
     lock <- newEmptyMVar
