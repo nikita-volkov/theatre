@@ -10,6 +10,7 @@ module Theatre
     -- * Usage
     tell,
     kill,
+    wait,
   )
 where
 
