@@ -79,8 +79,10 @@ instance Decidable Actor where
 spawnStateless ::
   -- | Interpreter of a message
   (message -> IO ()) ->
+  -- | Clean up when killed
+  (IO ()) ->
   IO (Actor message)
-spawnStateless interpretMessage =
+spawnStateless interpretMessage cleanUp =
   do
     (inChan, outChan) <- E.newChan
     lock <- newEmptyMVar
@@ -94,7 +96,10 @@ spawnStateless interpretMessage =
               do
                 interpretMessage payload
                 loop
-            Nothing -> putMVar lock ()
+            Nothing ->
+              do
+                cleanUp
+                putMVar lock ()
     return
       ( Actor
           (E.writeChan inChan . Just)
