@@ -1,7 +1,7 @@
 cabal-version: 3.0
 
 name: theatre
-version: 1.0.0.1
+version: 1.0.0.2
 category: Concurrency, Actors
 synopsis: Minimalistic actor library
 homepage: https://github.com/nikita-volkov/theatre
