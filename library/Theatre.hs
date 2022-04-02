@@ -1,34 +1,31 @@
-{-|
-Minimalistic actor library.
--}
+-- |
+-- Minimalistic actor library.
 module Theatre
-(
-  Actor,
-  -- * Construction
-  graceful,
-  disgraceful,
-  suicidal,
-  -- * Usage
-  tell,
-  kill,
-)
+  ( Actor,
+
+    -- * Construction
+    graceful,
+    disgraceful,
+    suicidal,
+
+    -- * Usage
+    tell,
+    kill,
+  )
 where
 
-import Theatre.Prelude
 import qualified Control.Concurrent.Chan.Unagi as E
 import qualified SlaveThread as F
+import Theatre.Prelude
 
-
-{-|
-Actor, which processes the messages of type @message@.
-
-An abstraction over the message channel, thread-forking and killing.
--}
-data Actor message =
-  Actor {
-    {-| Send a message to the actor -}
+-- |
+-- Actor, which processes the messages of type @message@.
+--
+-- An abstraction over the message channel, thread-forking and killing.
+data Actor message = Actor
+  { -- | Send a message to the actor
     tell :: message -> IO (),
-    {-| Kill the actor -}
+    -- | Kill the actor
     kill :: IO ()
   }
 
@@ -74,50 +71,59 @@ instance Decidable Actor where
       kill =
         leftKill >> rightKill
 
-{-|
-An actor which cannot die by itself unless explicitly killed.
-
-Given an interpreter of messages,
-forks a thread to run the computation on and 
-produces a handle to address that actor.
-
-Killing that actor will make it process all the messages in the queue first.
-All the messages sent to it after killing won't be processed.
--}
-graceful :: (message -> IO ()) {-^ Interpreter of a message -} -> IO (Actor message)
+-- |
+-- An actor which cannot die by itself unless explicitly killed.
+--
+-- Given an interpreter of messages,
+-- forks a thread to run the computation on and
+-- produces a handle to address that actor.
+--
+-- Killing that actor will make it process all the messages in the queue first.
+-- All the messages sent to it after killing won't be processed.
+graceful ::
+  -- | Interpreter of a message
+  (message -> IO ()) ->
+  IO (Actor message)
 graceful interpretMessage =
   do
     (inChan, outChan) <- E.newChan
-    F.fork $ fix $ \loop -> {-# SCC "graceful/loop" #-} do
-      message <- E.readChan outChan
-      case message of
-        Just payload ->
-          do
-            interpretMessage payload
-            loop
-        Nothing ->
-          return ()
+    F.fork $
+      fix $ \loop ->
+        {-# SCC "graceful/loop" #-}
+        do
+          message <- E.readChan outChan
+          case message of
+            Just payload ->
+              do
+                interpretMessage payload
+                loop
+            Nothing ->
+              return ()
     return (Actor (E.writeChan inChan . Just) (E.writeChan inChan Nothing))
 
-{-|
-An actor which cannot die by itself unless explicitly killed.
-
-Given an interpreter of messages,
-forks a thread to run the computation on and 
-produces a handle to address that actor.
--}
-disgraceful :: (message -> IO ()) {-^ Interpreter of a message -} -> IO (Actor message)
+-- |
+-- An actor which cannot die by itself unless explicitly killed.
+--
+-- Given an interpreter of messages,
+-- forks a thread to run the computation on and
+-- produces a handle to address that actor.
+disgraceful ::
+  -- | Interpreter of a message
+  (message -> IO ()) ->
+  IO (Actor message)
 disgraceful receiver =
   suicidal (\producer -> forever (producer >>= receiver))
 
-{-|
-An actor, whose interpreter can decide that the actor should die.
-
-Given an implementation of a receiver loop of messages,
-forks a thread to run that receiver on and
-produces a handle to address that actor.
--}
-suicidal :: (IO message -> IO ()) {-^ A message receiver loop. When the loop exits, the actor dies -} -> IO (Actor message)
+-- |
+-- An actor, whose interpreter can decide that the actor should die.
+--
+-- Given an implementation of a receiver loop of messages,
+-- forks a thread to run that receiver on and
+-- produces a handle to address that actor.
+suicidal ::
+  -- | A message receiver loop. When the loop exits, the actor dies
+  (IO message -> IO ()) ->
+  IO (Actor message)
 suicidal receiver =
   do
     (inChan, outChan) <- E.newChan
