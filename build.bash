@@ -1,7 +1,7 @@
 #!/bin/bash
 set -eo pipefail
 
-ormolu --mode inplace -ce \
+ormolu -ci \
 $(find . -name "*.hs" \
   -not -path "./*.stack-work/*" \
   -not -path "./.git/*")
