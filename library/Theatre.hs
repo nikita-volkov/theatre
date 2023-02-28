@@ -104,7 +104,7 @@ spawnStateless interpretMessage cleanUp =
       ( Actor
           (E.writeChan inChan . Just)
           (E.writeChan inChan Nothing)
-          (takeMVar lock)
+          (readMVar lock)
       )
 
 -- |
@@ -139,5 +139,5 @@ spawnStateful state progress finalise =
       ( Actor
           (E.writeChan inChan . Just)
           (E.writeChan inChan Nothing)
-          (takeMVar lock)
+          (readMVar lock)
       )
