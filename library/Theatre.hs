@@ -112,7 +112,10 @@ disgraceful ::
   (message -> IO ()) ->
   IO (Actor message)
 disgraceful receiver =
-  suicidal (\producer -> forever (producer >>= receiver))
+  do
+    (inChan, outChan) <- E.newChan
+    threadId <- F.fork (forever (E.readChan outChan >>= receiver))
+    return (Actor (E.writeChan inChan) (killThread threadId))
 
 -- |
 -- An actor, whose interpreter can decide that the actor should die.
@@ -122,10 +125,16 @@ disgraceful receiver =
 -- produces a handle to address that actor.
 suicidal ::
   -- | A message receiver loop. When the loop exits, the actor dies
-  (IO message -> IO ()) ->
+  (IO (Either (IO message) message) -> IO ()) ->
   IO (Actor message)
 suicidal receiver =
   do
     (inChan, outChan) <- E.newChan
-    threadId <- F.fork (receiver (E.readChan outChan))
+    threadId <- F.fork (receiver (recv outChan))
     return (Actor (E.writeChan inChan) (killThread threadId))
+  where
+    recv outChan = do
+      (element, readBlocking) <- E.tryReadChan outChan
+      E.tryRead element >>= \case
+        Nothing -> return (Left readBlocking)
+        Just msg -> return (Right msg)
