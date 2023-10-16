@@ -87,8 +87,9 @@ graceful ::
 graceful interpretMessage =
   do
     (inChan, outChan) <- E.newChan
-    F.fork $
-      fix $ \loop ->
+    F.fork
+      $ fix
+      $ \loop ->
         {-# SCC "graceful/loop" #-}
         do
           message <- E.readChan outChan
